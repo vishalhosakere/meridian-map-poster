@@ -74,6 +74,8 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [widthKm, setWidthKm] = useState(3)
   const [includeBuildings, setIncludeBuildings] = useState(false)
+  const [includeRailways, setIncludeRailways] = useState(false)
+  const [includePaths, setIncludePaths] = useState(false)
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
   const [fetchLayer, setFetchLayer] = useState('')
@@ -233,14 +235,12 @@ export default function App() {
 
       setStatus('fetching')
       setFeatures([])
-      // Drop detail that's invisible (and huge) at large areas.
-      const paths = widthKm <= 8
-      const minorRoads = widthKm <= 30
+      const minorRoads = widthKm <= 30 // residential streets get too dense past this
       await fetchOsmProgressive(
         lat,
         lon,
         widthKm,
-        { includeBuildings, minorRoads, paths, signal: ac.signal },
+        { includeBuildings, railways: includeRailways, paths: includePaths, minorRoads, signal: ac.signal },
         (feats) => {
           if (ac.signal.aborted) return
           setFeatures((prev) => [...prev, ...feats])
@@ -379,20 +379,27 @@ export default function App() {
               suffix=" km"
               onChange={setWidthKm}
             />
+            <div className="field-label">Extra layers</div>
+            <Toggle label="Railways" checked={includeRailways} onChange={setIncludeRailways} />
+            <Toggle
+              label="Paths & trails"
+              checked={includePaths}
+              onChange={setIncludePaths}
+              hint={includePaths && widthKm > 8 ? 'heavy' : undefined}
+            />
             <Toggle
               label="Buildings"
               checked={includeBuildings}
               onChange={setIncludeBuildings}
-              hint={widthKm > 6 ? 'heavy at this size' : undefined}
+              hint={includeBuildings && widthKm > 6 ? 'heavy' : undefined}
             />
             {widthKm >= 12 && (
               <p className="note warn">
-                Large area — data loads in passes; detail is simplified
-                {widthKm > 30 ? ' (minor streets & footpaths omitted)' : ' (footpaths omitted)'}.
-                {includeBuildings ? ' Turn Buildings off above ~15 km to keep it responsive.' : ''}
+                Large area — loads in passes{widthKm > 30 ? '; minor streets omitted above 30 km' : ''}.
+                {includeBuildings || includePaths ? ' Buildings/Paths are heavy at this size.' : ''}
               </p>
             )}
-            <p className="note">Adjust area or buildings, then press Generate to refetch data.</p>
+            <p className="note">Roads, water &amp; parks are always included. Change area or layers, then Generate.</p>
 
             {status === 'error' && <p className="status err">⚠ {error}</p>}
             {status === 'ready' && <p className="status ok">Ready · {features.length.toLocaleString()} features</p>}

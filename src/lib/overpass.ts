@@ -29,11 +29,13 @@ interface OverpassElement {
 }
 
 export interface FetchOptions {
+  /** Opt-in extras (kept out of the default query to stay light — fewer/faster requests). */
   includeBuildings: boolean
-  /** residential/service/unclassified roads (dropped at very large areas). */
-  minorRoads: boolean
-  /** footways/paths/cycleways/steps (dropped beyond a few km — invisible + huge count). */
+  railways: boolean
+  /** footways/paths/cycleways/steps — huge count, opt-in. */
   paths: boolean
+  /** residential/service/unclassified roads (auto-dropped at very large areas). */
+  minorRoads: boolean
   signal?: AbortSignal
 }
 
@@ -43,44 +45,42 @@ export interface LayerPass {
 }
 
 /**
- * One Overpass query per layer group, each constrained to ONLY the tag values we render.
- * This is the core fix for large areas: we no longer download unstyled landuse/natural/
- * highway data just to discard it in classify().
+ * One Overpass query per layer group, constrained to ONLY the tag values we render.
+ * The default set stays lean (roads + core water + core parks — like maptoposter) so
+ * requests are small and fast; heavier layers (rail, paths, buildings) are opt-in.
  */
 function passes(bbox: string, opts: FetchOptions): LayerPass[] {
   const b = `(${bbox})`
   const list: LayerPass[] = []
 
-  // One query per broad group keeps the request count low (fewer 429s) while still
-  // rendering progressively. Level-of-detail: drop invisible road classes at large areas.
+  // Roads (+ optional rail) in one pass. LOD: minor roads auto-drop at large areas; paths opt-in.
   let roadClasses = 'motorway|trunk|primary|secondary|tertiary'
   if (opts.minorRoads) roadClasses += '|residential|unclassified|living_street|road|service'
   if (opts.paths) roadClasses += '|pedestrian|footway|path|cycleway|track|steps|bridleway|corridor'
-  list.push({
-    key: 'roads',
-    clauses: [
-      `way["highway"~"^(${roadClasses})(_link)?$"]${b};`,
-      `way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]${b};`,
-    ],
-  })
+  const roadClauses = [`way["highway"~"^(${roadClasses})(_link)?$"]${b};`]
+  if (opts.railways) {
+    roadClauses.push(`way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]${b};`)
+  }
+  list.push({ key: opts.railways ? 'roads & rail' : 'roads', clauses: roadClauses })
 
+  // Core water + parks (lean — the long agricultural/misc landuse tail is intentionally omitted).
   list.push({
     key: 'land & water',
     clauses: [
       `way["natural"~"^(water|bay|strait)$"]${b};`,
       `way["water"]${b};`,
       `way["landuse"~"^(reservoir|basin)$"]${b};`,
-      `way["waterway"~"^(river|canal|stream|riverbank|dock|drain|ditch|tidal_channel)$"]${b};`,
+      `way["waterway"~"^(river|canal|stream|riverbank)$"]${b};`,
       `way["natural"="coastline"]${b};`,
-      `way["natural"~"^(beach|sand|dune)$"]${b};`,
-      `way["leisure"~"^(park|garden|nature_reserve|golf_course|pitch|recreation_ground|common|dog_park|playground)$"]${b};`,
-      `way["landuse"~"^(forest|grass|meadow|recreation_ground|village_green|cemetery|allotments|orchard|vineyard|farmland|greenfield|flowerbed|plant_nursery|grassland)$"]${b};`,
-      `way["natural"~"^(wood|scrub|grassland|heath|fell|tree_row|wetland)$"]${b};`,
+      `way["natural"~"^(beach|sand)$"]${b};`,
+      `way["leisure"~"^(park|garden|nature_reserve|golf_course|pitch|recreation_ground)$"]${b};`,
+      `way["landuse"~"^(forest|grass|meadow|cemetery|recreation_ground)$"]${b};`,
+      `way["natural"~"^(wood|scrub|heath|grassland|wetland)$"]${b};`,
       `relation["natural"~"^(water|bay|strait|wetland|wood)$"]${b};`,
       `relation["water"]${b};`,
       `relation["waterway"="riverbank"]${b};`,
-      `relation["leisure"~"^(park|garden|nature_reserve|recreation_ground)$"]${b};`,
-      `relation["landuse"~"^(forest|grass|meadow|cemetery|farmland)$"]${b};`,
+      `relation["leisure"~"^(park|garden|nature_reserve)$"]${b};`,
+      `relation["landuse"~"^(forest|grass|meadow|cemetery)$"]${b};`,
     ],
   })
 
