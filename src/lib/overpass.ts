@@ -3,11 +3,15 @@ import { buildSeaPolygons, type Rect } from './coastline'
 import { bboxFromCenter, project } from './projection'
 import type { Feature, Pt } from './types'
 
-const ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-]
+// In production, hit same-origin Netlify proxy paths (see netlify.toml) to dodge browser
+// CORS. In local dev, call the mirrors directly (they allow CORS from localhost).
+const ENDPOINTS = import.meta.env.PROD
+  ? ['/osm/de', '/osm/kumi', '/osm/mail']
+  : [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    ]
 // Remember the endpoint that last worked so multi-pass fetches don't re-fail over every time.
 let preferredEndpoint = 0
 
