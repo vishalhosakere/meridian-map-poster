@@ -6,8 +6,10 @@
 [build.environment]
   NODE_VERSION = "22"
 
-# SPA fallback
+# SPA fallback. force = false (the default) means files that exist in dist, such as
+# robots.txt, sitemap.xml and og-image.png, are served as-is and never rewritten.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+  force = false

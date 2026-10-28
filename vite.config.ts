@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { seo } from './scripts/vite-plugin-seo'
 
 // Local-only by policy: never expose the dev/preview servers on the LAN.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), seo()],
   server: {
     host: '127.0.0.1',
     port: 4102,
