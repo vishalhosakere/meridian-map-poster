@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { seo } from './scripts/vite-plugin-seo'
+import { seo } from './scripts/vite-plugin-seo.ts'
 
 // Local-only by policy: never expose the dev/preview servers on the LAN.
 export default defineConfig({
