@@ -258,6 +258,9 @@ function drawMapLabel(
       tctx.fillRect(0, 0, dw, dh)
       ctx.drawImage(tmp, 0, 0, dw, dh, r.x, stripY, r.w, gradH)
     }
+    // Free the strip immediately: this runs every preview frame, and WebKit caps total canvas memory.
+    tmp.width = 0
+    tmp.height = 0
   }
 
   // Gradient scrim: opaque at the bottom edge, fading up into the map.
