@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { compose, mapRectOf, type Buckets, type Composition, type StyleState } from '../lib/render'
 import type { View } from '../lib/types'
 
@@ -93,7 +93,7 @@ export default function MapCanvas({
 
   const rectNow = (): Rect => mapRectOf(size.w, size.h, composition)
 
-  function onPointerDown(e: React.PointerEvent) {
+  function onPointerDown(e: ReactPointerEvent) {
     if (!hasData) return
     const canvas = canvasRef.current!
     const b = canvas.getBoundingClientRect()
@@ -105,7 +105,7 @@ export default function MapCanvas({
     canvas.classList.add('grabbing')
   }
 
-  function onPointerMove(e: React.PointerEvent) {
+  function onPointerMove(e: ReactPointerEvent) {
     if (!drag.current) return
     const canvas = canvasRef.current!
     const b = canvas.getBoundingClientRect()
@@ -128,7 +128,7 @@ export default function MapCanvas({
     })
   }
 
-  function endDrag(e: React.PointerEvent) {
+  function endDrag(e: ReactPointerEvent) {
     drag.current = null
     canvasRef.current?.classList.remove('grabbing')
     try {

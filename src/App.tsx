@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import MapCanvas from './components/MapCanvas'
 import { ColorInput, Section, Segmented, Slider, Toggle } from './components/ui'
 import { exportPng } from './lib/export'
@@ -188,7 +188,7 @@ export default function App() {
     setRotationDeg(deg % 360)
   }
 
-  async function generate(e?: React.FormEvent, place?: Suggestion) {
+  async function generate(e?: FormEvent, place?: Suggestion) {
     e?.preventDefault()
     setShowSuggest(false)
     abortRef.current?.abort()
@@ -267,7 +267,7 @@ export default function App() {
     generate(undefined, s)
   }
 
-  function onQueryKeyDown(e: React.KeyboardEvent) {
+  function onQueryKeyDown(e: KeyboardEvent) {
     if (!showSuggest || suggestions.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()

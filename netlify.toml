@@ -2,6 +2,10 @@
   command = "npm run build"
   publish = "dist"
 
+# Vite 8 needs Node 20.19+ / 22.12+.
+[build.environment]
+  NODE_VERSION = "22"
+
 # SPA fallback
 [[redirects]]
   from = "/*"

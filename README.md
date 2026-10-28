@@ -27,7 +27,7 @@ No API keys, no tile servers, no backend. It's a static site.
 
 ## Tech
 
-- React + Vite + TypeScript, no map library.
+- React 19 + Vite 8 + TypeScript 7, no map library.
 - `src/lib/overpass.ts` — Overpass API query + multipolygon ring stitching.
 - `src/lib/projection.ts` — Web-Mercator projection.
 - `src/lib/classify.ts` — OSM tags → style layer.
@@ -38,10 +38,12 @@ No API keys, no tile servers, no backend. It's a static site.
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
+npm run dev      # http://127.0.0.1:4102
 ```
 
-Other scripts: `npm run build` (outputs `dist/`), `npm run preview`, `npm run typecheck`.
+Other scripts: `npm run build` (outputs `dist/`), `npm run preview` (http://127.0.0.1:4112),
+`npm run typecheck`. Requires Node 20.19+ or 22.12+ (Vite 8). The dev and preview servers bind to
+`127.0.0.1` only; they are not reachable from other devices on your network.
 
 ## Deploy to Netlify
 
