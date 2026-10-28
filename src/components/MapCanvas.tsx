@@ -131,6 +131,8 @@ export default function MapCanvas({
       }
       setSize({ w: Math.floor(w), h: Math.floor(h), cw: el.clientWidth, ch: el.clientHeight })
     }
+    // Size before first paint so the canvas never flashes at its 300x150 default (layout shift).
+    fit()
     const ro = new ResizeObserver(fit)
     ro.observe(el)
     return () => ro.disconnect()
@@ -155,8 +157,6 @@ export default function MapCanvas({
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = Math.round(size.w * dpr)
     canvas.height = Math.round(size.h * dpr)
-    canvas.style.width = `${size.w}px`
-    canvas.style.height = `${size.h}px`
   }, [size])
 
   useEffect(() => {
@@ -289,6 +289,7 @@ export default function MapCanvas({
       <canvas
         ref={canvasRef}
         className="map-canvas"
+        style={size.w === 0 ? { visibility: 'hidden' } : { width: size.w, height: size.h }}
         role="img"
         aria-label={hasData ? `Poster preview: ${composition.title || 'map'}` : 'Empty poster preview'}
         onPointerDown={onPointerDown}

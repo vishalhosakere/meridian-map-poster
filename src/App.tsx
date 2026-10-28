@@ -343,7 +343,7 @@ export default function App() {
       if (handheld) setExportResult(result)
       else {
         downloadBlob(result.blob, result.filename)
-        if (result.downscaled) setExportResult(result)
+        if (result.fellBack) setExportResult(result)
       }
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Export failed')
@@ -682,7 +682,7 @@ export default function App() {
       </p>
       {capped && budget && (
         <p className="note warn">
-          iPhone and iPad cap canvases at {Math.round(budget / 1e6)} MP, so this exports at {exportSize.width} ×{' '}
+          iPhone and iPad cap canvases at {Math.floor(budget / 1e5) / 10} MP, so this exports at {exportSize.width} ×{' '}
           {exportSize.height} instead of {requestedSize.width} × {requestedSize.height}.
         </p>
       )}
@@ -702,7 +702,7 @@ export default function App() {
             {handheld ? 'Poster ready' : 'Downloaded'} · {exportResult.width} × {exportResult.height} ·{' '}
             {formatMB(exportResult.blob.size)}
           </p>
-          {exportResult.downscaled && (
+          {exportResult.fellBack && (
             <p className="note warn">This device couldn’t render the full size, so the poster was scaled down to fit.</p>
           )}
           {handheld && (

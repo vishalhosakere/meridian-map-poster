@@ -20,8 +20,8 @@ export interface RenderedPoster {
   blob: Blob
   width: number
   height: number
-  /** True when the device could not allocate the requested size and a smaller one was used. */
-  downscaled: boolean
+  /** True when a render failed at the expected size and a smaller fallback was used. */
+  fellBack: boolean
 }
 
 // Last-resort size when even the iOS-sized canvas fails (very low-memory devices).
@@ -70,7 +70,7 @@ export async function renderPoster(input: RenderInput): Promise<RenderedPoster> 
   for (const size of attempts) {
     const blob = await renderAt(size, input)
     if (blob) {
-      return { blob, ...size, downscaled: size.width !== requested.width || size.height !== requested.height }
+      return { blob, ...size, fellBack: size !== first }
     }
   }
   throw new Error('This device ran out of memory rendering the poster. Try a smaller size.')
