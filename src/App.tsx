@@ -4,7 +4,7 @@ import { BrandMark, ChipGroup, ColorInput, Section, Segmented, Slider, Toggle } 
 import { ChevronDownIcon, CloseIcon, DropIcon, ExportIcon, FrameIcon, PinIcon, SearchIcon, ThemeIcon } from './components/icons'
 import { canShareFiles, canvasPixelBudget, HANDHELD_WARN_PIXELS } from './lib/device'
 import { downloadBlob, effectivePosterSize, posterSize, renderPoster, shareBlob, type RenderedPoster } from './lib/export'
-import { fetchOsmProgressive } from './lib/overpass'
+import { effectiveLayers, fetchOsm, LAYER_MAX_KM } from './lib/overpass'
 import { geocode } from './lib/geocode'
 import { suggestPlaces, type Suggestion } from './lib/suggest'
 import { project, spanMetersForWidthKm } from './lib/projection'
@@ -281,20 +281,12 @@ export default function App() {
 
       setStatus('fetching')
       setFeatures([])
-      const minorRoads = widthKm <= 30 // residential streets get too dense past this
-      await fetchOsmProgressive(
-        lat,
-        lon,
-        widthKm,
-        { includeBuildings, railways: includeRailways, paths: includePaths, minorRoads, signal: ac.signal },
-        (feats) => {
-          if (ac.signal.aborted) return
-          setFeatures((prev) => [...prev, ...feats])
-        },
-        (message) => {
-          if (!ac.signal.aborted) setFetchLayer(message)
-        },
-      )
+      const layers = effectiveLayers(widthKm, { buildings: includeBuildings, railways: includeRailways, paths: includePaths })
+      const feats = await fetchOsm(lat, lon, widthKm, layers, ac.signal, (message) => {
+        if (!ac.signal.aborted) setFetchLayer(message)
+      })
+      if (ac.signal.aborted) return
+      setFeatures(feats)
       setFetchLayer('')
       setStatus('ready')
     } catch (err) {
@@ -444,6 +436,12 @@ export default function App() {
     </>
   )
 
+  const leftOut = [
+    widthKm > LAYER_MAX_KM.minorRoads && `minor streets (up to ${LAYER_MAX_KM.minorRoads} km)`,
+    includePaths && widthKm > LAYER_MAX_KM.paths && `paths (up to ${LAYER_MAX_KM.paths} km)`,
+    includeBuildings && widthKm > LAYER_MAX_KM.buildings && `buildings (up to ${LAYER_MAX_KM.buildings} km)`,
+  ].filter((item): item is string => Boolean(item))
+
   const locationPanel = (
     <>
       {!isMobile && searchForm}
@@ -454,19 +452,16 @@ export default function App() {
         label="Paths & trails"
         checked={includePaths}
         onChange={setIncludePaths}
-        hint={includePaths && widthKm > 8 ? 'heavy' : undefined}
+        hint={includePaths && widthKm > LAYER_MAX_KM.paths ? `up to ${LAYER_MAX_KM.paths} km` : undefined}
       />
       <Toggle
         label="Buildings"
         checked={includeBuildings}
         onChange={setIncludeBuildings}
-        hint={includeBuildings && widthKm > 6 ? 'heavy' : undefined}
+        hint={includeBuildings && widthKm > LAYER_MAX_KM.buildings ? `up to ${LAYER_MAX_KM.buildings} km` : undefined}
       />
-      {widthKm >= 12 && (
-        <p className="note warn">
-          Large area — loads in passes{widthKm > 30 ? '; minor streets omitted above 30 km' : ''}.
-          {includeBuildings || includePaths ? ' Buildings/Paths are heavy at this size.' : ''}
-        </p>
+      {leftOut.length > 0 && (
+        <p className="note warn">Left out at this size to keep the map quick: {leftOut.join(', ')}.</p>
       )}
       <p className="note">Roads, water &amp; parks are always included. Change area or layers, then Generate.</p>
       {isMobile && (

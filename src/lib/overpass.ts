@@ -3,18 +3,22 @@ import { buildSeaPolygons, type Rect } from './coastline'
 import { bboxFromCenter, project } from './projection'
 import type { Feature, Pt } from './types'
 
-// Global Overpass mirrors that send `Access-Control-Allow-Origin: *`, so the browser calls
-// them directly (no proxy → no Netlify edge timeout). Ordered by reliability; overpass-api.de
-// is a last resort (CORS-friendly but frequently overloaded → 504).
+// overpass.ch, used first when VITE_OVERPASS_KEY is set: fast, and generous per query (60 s, 256 MiB;
+// 30 requests a minute). Vite inlines the key into the client bundle, so it is readable on the deployed site.
+const OVERPASS_KEY = import.meta.env.VITE_OVERPASS_KEY?.trim()
+const KEYED_ENDPOINT = OVERPASS_KEY ? `https://api.overpass.ch/v1/${OVERPASS_KEY}/interpreter` : null
+
+// Public mirrors that send `Access-Control-Allow-Origin: *`, so the browser calls them directly (no proxy → no
+// Netlify edge timeout). The fallback without a key, or when overpass.ch fails. Ordered by past reliability.
 // NB: overpass.osm.ch is Switzerland-only — do NOT use it (returns empty outside CH).
-const ENDPOINTS = [
+const PUBLIC_ENDPOINTS = [
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
 ]
-// Remember the endpoint that last worked so multi-pass fetches don't re-fail over every time.
-let preferredEndpoint = 0
+// Remember the mirror that last worked so the next map tries it first.
+let preferredPublic = 0
 
 interface Geom {
   lat: number
@@ -28,65 +32,63 @@ interface OverpassElement {
   members?: Array<{ type: string; role: string; geometry?: Geom[] }>
 }
 
-export interface FetchOptions {
-  /** Opt-in extras (kept out of the default query to stay light — fewer/faster requests). */
-  includeBuildings: boolean
-  railways: boolean
-  /** footways/paths/cycleways/steps — huge count, opt-in. */
-  paths: boolean
-  /** residential/service/unclassified roads (auto-dropped at very large areas). */
-  minorRoads: boolean
-  signal?: AbortSignal
-}
-
-export interface LayerPass {
-  key: string
-  clauses: string[]
-}
-
 /**
- * One Overpass query per layer group, constrained to ONLY the tag values we render.
- * The default set stays lean (roads + core water + core parks — like maptoposter) so
- * requests are small and fast; heavier layers (rail, paths, buildings) are opt-in.
+ * The widest area (km) at which each heavy layer is still fetched. Above these a map is main roads, water and
+ * parks (plus rail when chosen), which keeps one query well inside overpass.ch's 60 s / 256 MiB: in New York and
+ * Bengaluru the base query measured 25–36 MB at 10 km and 207 MB (23 s) at 50 km with rail.
  */
-function passes(bbox: string, opts: FetchOptions): LayerPass[] {
+export const LAYER_MAX_KM = { minorRoads: 5, paths: 5, buildings: 5 } as const
+
+export interface LayerChoice {
+  buildings: boolean
+  railways: boolean
+  /** footways/paths/cycleways/steps — huge count. */
+  paths: boolean
+}
+
+export interface Layers extends LayerChoice {
+  /** residential/service/unclassified roads. */
+  minorRoads: boolean
+}
+
+/** The layers actually fetched for an area, after the size caps. */
+export function effectiveLayers(widthKm: number, chosen: LayerChoice): Layers {
+  return {
+    minorRoads: widthKm <= LAYER_MAX_KM.minorRoads,
+    paths: chosen.paths && widthKm <= LAYER_MAX_KM.paths,
+    buildings: chosen.buildings && widthKm <= LAYER_MAX_KM.buildings,
+    railways: chosen.railways,
+  }
+}
+
+/** Every layer in one union, constrained to ONLY the tag values we render. */
+function clauses(bbox: string, layers: Layers): string[] {
   const b = `(${bbox})`
-  const list: LayerPass[] = []
-
-  // Roads (+ optional rail) in one pass. LOD: minor roads auto-drop at large areas; paths opt-in.
   let roadClasses = 'motorway|trunk|primary|secondary|tertiary'
-  if (opts.minorRoads) roadClasses += '|residential|unclassified|living_street|road|service'
-  if (opts.paths) roadClasses += '|pedestrian|footway|path|cycleway|track|steps|bridleway|corridor'
-  const roadClauses = [`way["highway"~"^(${roadClasses})(_link)?$"]${b};`]
-  if (opts.railways) {
-    roadClauses.push(`way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]${b};`)
+  if (layers.minorRoads) roadClasses += '|residential|unclassified|living_street|road|service'
+  if (layers.paths) roadClasses += '|pedestrian|footway|path|cycleway|track|steps|bridleway|corridor'
+  const list = [`way["highway"~"^(${roadClasses})(_link)?$"]${b};`]
+  if (layers.railways) {
+    list.push(`way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]${b};`)
   }
-  list.push({ key: opts.railways ? 'roads & rail' : 'roads', clauses: roadClauses })
-
   // Core water + parks (lean — the long agricultural/misc landuse tail is intentionally omitted).
-  list.push({
-    key: 'land & water',
-    clauses: [
-      `way["natural"~"^(water|bay|strait)$"]${b};`,
-      `way["water"]${b};`,
-      `way["landuse"~"^(reservoir|basin)$"]${b};`,
-      `way["waterway"~"^(river|canal|stream|riverbank)$"]${b};`,
-      `way["natural"="coastline"]${b};`,
-      `way["natural"~"^(beach|sand)$"]${b};`,
-      `way["leisure"~"^(park|garden|nature_reserve|golf_course|pitch|recreation_ground)$"]${b};`,
-      `way["landuse"~"^(forest|grass|meadow|cemetery|recreation_ground)$"]${b};`,
-      `way["natural"~"^(wood|scrub|heath|grassland|wetland)$"]${b};`,
-      `relation["natural"~"^(water|bay|strait|wetland|wood)$"]${b};`,
-      `relation["water"]${b};`,
-      `relation["waterway"="riverbank"]${b};`,
-      `relation["leisure"~"^(park|garden|nature_reserve)$"]${b};`,
-      `relation["landuse"~"^(forest|grass|meadow|cemetery)$"]${b};`,
-    ],
-  })
-
-  if (opts.includeBuildings) {
-    list.push({ key: 'buildings', clauses: [`way["building"]${b};`, `relation["building"]${b};`] })
-  }
+  list.push(
+    `way["natural"~"^(water|bay|strait)$"]${b};`,
+    `way["water"]${b};`,
+    `way["landuse"~"^(reservoir|basin)$"]${b};`,
+    `way["waterway"~"^(river|canal|stream|riverbank)$"]${b};`,
+    `way["natural"="coastline"]${b};`,
+    `way["natural"~"^(beach|sand)$"]${b};`,
+    `way["leisure"~"^(park|garden|nature_reserve|golf_course|pitch|recreation_ground)$"]${b};`,
+    `way["landuse"~"^(forest|grass|meadow|cemetery|recreation_ground)$"]${b};`,
+    `way["natural"~"^(wood|scrub|heath|grassland|wetland)$"]${b};`,
+    `relation["natural"~"^(water|bay|strait|wetland|wood)$"]${b};`,
+    `relation["water"]${b};`,
+    `relation["waterway"="riverbank"]${b};`,
+    `relation["leisure"~"^(park|garden|nature_reserve)$"]${b};`,
+    `relation["landuse"~"^(forest|grass|meadow|cemetery)$"]${b};`,
+  )
+  if (layers.buildings) list.push(`way["building"]${b};`, `relation["building"]${b};`)
   return list
 }
 
@@ -178,17 +180,22 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-const REQUEST_TIMEOUT = 45000 // abort a single mirror request after this so it can't hang the UI
-const MAX_ATTEMPTS = 4
+const KEYED_TIMEOUT = 150_000 // overpass.ch stops a query at 60 s; the rest is downloading up to ~200 MB
+const PUBLIC_TIMEOUT = 45_000 // abort a single mirror request after this so it can't hang the UI
+const PUBLIC_ROUNDS = 2
+// A healthy mirror answers /api/status at once; an overloaded one accepts the connection and never replies,
+// which used to cost a full PUBLIC_TIMEOUT per mirror per round.
+const PROBE_TIMEOUT = 4_000
+const PROBE_TTL = 60_000
 
 interface HttpError extends Error {
   status?: number
   retryAfter?: number
 }
 
-async function fetchOnce(endpoint: string, body: string, signal?: AbortSignal): Promise<OverpassElement[]> {
+async function fetchOnce(endpoint: string, body: string, timeoutMs: number, signal?: AbortSignal): Promise<OverpassElement[]> {
   const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(new DOMException('timeout', 'TimeoutError')), REQUEST_TIMEOUT)
+  const timer = setTimeout(() => ac.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs)
   const onAbort = () => ac.abort()
   signal?.addEventListener('abort', onAbort)
   try {
@@ -213,70 +220,114 @@ async function fetchOnce(endpoint: string, body: string, signal?: AbortSignal): 
   }
 }
 
-async function runQuery(
-  query: string,
-  signal?: AbortSignal,
-  onRetry?: (waitMs: number) => void,
-): Promise<OverpassElement[]> {
-  const body = `data=${encodeURIComponent(query)}`
-  let lastErr: HttpError | undefined
-  // Public Overpass mirrors return 429 (rate limit) / 504 (overloaded) — retry the whole
-  // mirror set with exponential backoff, honoring any Retry-After hint.
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    for (let i = 0; i < ENDPOINTS.length; i++) {
-      const idx = (preferredEndpoint + i) % ENDPOINTS.length
+let probe: { at: number; alive: Promise<string[]> } | null = null
+
+/** The public mirrors that answer at all within PROBE_TIMEOUT, checked in parallel and cached for a minute. */
+function aliveMirrors(): Promise<string[]> {
+  if (probe && Date.now() - probe.at < PROBE_TTL) return probe.alive
+  const alive = Promise.all(
+    PUBLIC_ENDPOINTS.map(async (url) => {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT)
       try {
-        const elements = await fetchOnce(ENDPOINTS[idx], body, signal)
-        preferredEndpoint = idx
+        // no-cors: not every status page sends CORS headers. Any reply, even an error page, shows the server is
+        // up; a mirror that refuses queries still fails fast on the real request.
+        await fetch(url.replace(/interpreter$/, 'status'), { mode: 'no-cors', cache: 'no-store', signal: ac.signal })
+        return url
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+    }),
+  ).then((urls) => urls.filter((u): u is string => u !== null))
+  probe = { at: Date.now(), alive }
+  return alive
+}
+
+const formBody = (list: string[], timeoutSec: number) =>
+  `data=${encodeURIComponent(`[out:json][timeout:${timeoutSec}];(${list.join('')});out geom;`)}`
+
+async function runQuery(
+  list: string[],
+  signal?: AbortSignal,
+  onStatus?: (message: string) => void,
+): Promise<OverpassElement[]> {
+  let lastErr: HttpError | undefined
+
+  if (KEYED_ENDPOINT) {
+    const body = formBody(list, 60)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await fetchOnce(KEYED_ENDPOINT, body, KEYED_TIMEOUT, signal)
+      } catch (err) {
+        if (signal?.aborted) throw err
+        lastErr = err as HttpError
+        // Rate-limited: wait once as told. Anything else falls back to the public mirrors.
+        if (lastErr.status !== 429 || attempt > 0) break
+        const wait = Math.min(lastErr.retryAfter ?? 5000, 20000)
+        onStatus?.(`map data · rate-limited, retrying in ${Math.round(wait / 1000)}s`)
+        await sleep(wait, signal)
+      }
+    }
+  }
+
+  const alive = await aliveMirrors()
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+  const rank = (url: string) => (PUBLIC_ENDPOINTS.indexOf(url) - preferredPublic + PUBLIC_ENDPOINTS.length) % PUBLIC_ENDPOINTS.length
+  const ordered = [...alive].sort((a, b) => rank(a) - rank(b))
+  const body = formBody(list, 180)
+  for (let round = 0; round < PUBLIC_ROUNDS && ordered.length; round++) {
+    for (const url of ordered) {
+      try {
+        const elements = await fetchOnce(url, body, PUBLIC_TIMEOUT, signal)
+        preferredPublic = PUBLIC_ENDPOINTS.indexOf(url)
         return elements
       } catch (err) {
         if (signal?.aborted) throw err
         lastErr = err as HttpError
       }
     }
-    if (attempt < MAX_ATTEMPTS - 1) {
-      const backoff = Math.min(2000 * 2 ** attempt, 15000) // 2s, 4s, 8s…
-      const wait = Math.max(backoff, lastErr?.retryAfter ?? 0)
-      onRetry?.(wait)
+    if (round < PUBLIC_ROUNDS - 1) {
+      const wait = Math.min(Math.max(2000, lastErr?.retryAfter ?? 0), 15000)
+      onStatus?.(`map data · servers busy, retrying in ${Math.round(wait / 1000)}s`)
       await sleep(wait, signal)
     }
   }
+
   const code = lastErr?.status
-  const reason = code === 429 ? 'rate-limited (429)' : code ? `busy (${code})` : lastErr?.message || 'request failed'
+  const reason =
+    !ordered.length && !code
+      ? 'not responding'
+      : code === 429
+        ? 'rate-limited (429)'
+        : code
+          ? `busy (${code})`
+          : lastErr?.name === 'TimeoutError'
+            ? 'too slow to answer'
+            : lastErr?.message || 'request failed'
   throw new Error(`Map data servers are ${reason}. Try again shortly, or reduce the area.`)
 }
 
-/**
- * Fetch OSM data one layer at a time, invoking `onPass` with each layer's features as it
- * arrives so the canvas can render progressively (major roads first, buildings last).
- */
-export async function fetchOsmProgressive(
+/** Fetch every layer for the area in one query (see LAYER_MAX_KM for what large areas leave out). */
+export async function fetchOsm(
   lat: number,
   lon: number,
   widthKm: number,
-  opts: FetchOptions,
-  onPass: (features: Feature[], key: string, done: boolean) => void,
+  layers: Layers,
+  signal?: AbortSignal,
   onStatus?: (message: string) => void,
-): Promise<void> {
+): Promise<Feature[]> {
   // Keep the fetch area close to the visible square at large zooms so we don't over-query.
   const pad = widthKm > 20 ? 1.08 : 1.25
   const { s, w, n, e } = bboxFromCenter(lat, lon, widthKm, pad)
-  const bbox = `${s},${w},${n},${e}`
   const sw = project(w, s)
   const ne = project(e, n)
   const mercRect: Rect = { minX: sw.x, minY: sw.y, maxX: ne.x, maxY: ne.y }
-  const plan = passes(bbox, opts)
-
-  for (let i = 0; i < plan.length; i++) {
-    const layer = plan[i]
-    onStatus?.(layer.key)
-    const query = `[out:json][timeout:180];(${layer.clauses.join('')});out geom;`
-    const elements = await runQuery(query, opts.signal, (waitMs) =>
-      onStatus?.(`${layer.key} · servers busy, retrying in ${Math.round(waitMs / 1000)}s`),
-    )
-    const { features, coastline } = parse(elements)
-    // Fill open sea from coastline (drawn first so it sits under other water/land).
-    if (coastline.length) features.unshift(...buildSeaPolygons(coastline, mercRect))
-    onPass(features, layer.key, i === plan.length - 1)
-  }
+  onStatus?.('map data')
+  const elements = await runQuery(clauses(`${s},${w},${n},${e}`, layers), signal, onStatus)
+  const { features, coastline } = parse(elements)
+  // Fill open sea from coastline (drawn first so it sits under other water/land).
+  if (coastline.length) features.unshift(...buildSeaPolygons(coastline, mercRect))
+  return features
 }

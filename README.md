@@ -12,8 +12,10 @@ No API keys, no tile servers, no backend. It's a static site.
 
 - **Any location** — type-ahead search (Photon autosuggest) + geocoding (Nominatim); city,
   neighborhood, or address.
-- **Adjustable area** — 0.5–50 km wide. Buildings are an optional layer (off by default);
-  large areas load in progressive passes with level-of-detail pruning.
+- **Adjustable area** — 0.5–50 km wide, loaded in one Overpass query. Rail, paths and buildings are
+  optional layers. Minor streets, paths and buildings load up to 5 km wide (`LAYER_MAX_KM` in
+  `src/lib/overpass.ts`); above that a map is main roads, water and parks (plus rail), which keeps even
+  50 km inside overpass.ch's 60 s / 256 MiB per-query budget.
 - **Interactive canvas** — drag to pan, scroll to zoom (toward the cursor), rotate. On touch
   screens: one-finger pan, pinch to zoom, two-finger twist to rotate.
 - **Works on phones** — below 820px the controls move into a bottom tab bar (Location / Theme /
@@ -90,13 +92,26 @@ the HTML-tag method:
 4. Submit `https://<your-site>/sitemap.xml` under **Sitemaps**, then use **URL inspection →
    Request indexing** for the home page.
 
+## Map data key (overpass.ch)
+
+Put the key in `.env.local` (git-ignored; see `.env.example`):
+
+```
+VITE_OVERPASS_KEY=ovp_…
+```
+
+For Netlify builds, add `VITE_OVERPASS_KEY` under Site configuration → Environment variables (scope:
+Builds). Vite inlines the key into the client bundle, so it is readable on the deployed site and anyone
+can spend its quota; move it behind a proxy before relying on it.
+
 ## Notes & limits
 
-- Uses the public **Overpass** (map data), **Nominatim** (geocoding) and **Photon**
-  (autosuggest) endpoints — all free and rate-limited. Requests are split into progressive
-  passes with value-constrained queries; on a 429/504 Meridian retries with backoff across
-  three Overpass mirrors. Very large areas *with buildings* are still heavy — for reliable
-  50 km rendering, point `ENDPOINTS` in `src/lib/overpass.ts` at a self-hosted Overpass.
+- Map data comes from **Overpass**: overpass.ch when `VITE_OVERPASS_KEY` is set (see below), otherwise
+  the public mirrors. Public mirrors are probed in parallel first (4 s each) and silent ones are
+  skipped, so a dead mirror costs seconds, not minutes. **Nominatim** (geocoding) and **Photon**
+  (autosuggest) are free public services and rate-limited.
+- Measured on overpass.ch in New York and Bengaluru: one query is 25–36 MB at 10 km, 129 MB at 8 km
+  with every layer, and 207 MB (23 s) at 50 km with rail.
 - Web fonts (Fraunces / Space Mono / Hanken Grotesk) load from the Google Fonts CDN — the
   only external asset. Non-Latin titles fall back until a CJK/Arabic font is bundled.
 - Zooming far out past the fetched area shows blank edges — increase **Area width** and press
